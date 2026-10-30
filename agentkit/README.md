@@ -5,9 +5,9 @@
 | Action | Price | What it does |
 |---|---|---|
 | `kushbitx_spendguard_evaluate` | free | Checks a proposed Base USDC payment against your spending policy before paying: APPROVE, HUMAN_APPROVAL or BLOCK. |
-| `kushbitx_quick_check` | 0.00098 USDC | Base chain identity and official USDC contract presence. |
-| `kushbitx_token_risk` | 0.00098 USDC | Sellability, taxes, privileged controls, holder concentration and market risk for a Base token. |
-| `kushbitx_transaction_preflight` | 0.00098 USDC | Simulates an unsigned Base transaction before you sign it. |
+| `kushbitx_quick_check` | 0.001 USDC | Base chain identity and official USDC contract presence. |
+| `kushbitx_token_risk` | 0.001 USDC | Sellability, taxes, privileged controls, holder concentration and market risk for a Base token. |
+| `kushbitx_transaction_preflight` | 0.001 USDC | Simulates an unsigned Base transaction before you sign it. |
 | `kushbitx_verify_payment` | 0.00288 USDC | Verifies a Base USDC transfer from its transaction hash. |
 
 Paid actions are paid per call with [x402](https://x402.org), signed by your agent's own AgentKit EVM wallet on Base mainnet. Current prices: https://kushbitx.com/pricing.

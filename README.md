@@ -9,9 +9,9 @@ Zero-dependency ESM client and runnable Node.js example for the complete KushBit
 | Token market preview | Free | Inspect basic Base token market data without connecting a wallet. |
 | Data coverage check | Free | See which risk checks have enough evidence before buying a report. |
 | SpendGuard | Free pilot | Evaluate payment policy before money moves, with optional protected policies and human approval. |
-| Token-risk report | 0.25 USDC | Receive structured token-risk evidence with missing checks identified. |
-| Transaction preflight | 0.05 USDC | Inspect an unsigned Base transaction before signing. |
-| Payment verification | 0.01 USDC | Verify an existing Base USDC payment against the expected recipient and amount. |
+| Token-risk report | 0.001 USDC | Receive structured token-risk evidence with missing checks identified. |
+| Transaction preflight | 0.001 USDC | Inspect an unsigned Base transaction before signing. |
+| Payment verification | 0.00288 USDC | Verify an existing Base USDC payment against the expected recipient and amount. |
 
 Paid endpoints use x402 and require explicit payment. There is no subscription. A delivered report can be `INCOMPLETE` when evidence is unavailable and may still incur the displayed fee.
 
