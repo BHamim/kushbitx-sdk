@@ -1,0 +1,12 @@
+{
+  "hooks": {
+    "PreSpend": [
+      {
+        "matcher": "^(Base0xSwap|Base0xGaslessSwap)$",
+        "hooks": [
+          { "type": "command", "command": "kushbitx-token-risk.sh", "timeout": 30 }
+        ]
+      }
+    ]
+  }
+}

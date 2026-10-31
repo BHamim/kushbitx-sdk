@@ -100,6 +100,7 @@ import { KushBitxClient } from 'https://kushbitx.com/sdk/kushbitx.mjs';
 - SpendGuard: https://kushbitx.com/spendguard
 - Integration example: https://kushbitx.com/examples/agent.mjs
 - Clodds skill (optional, external): [integrations/clodds/kushbitx-preflight](integrations/clodds/kushbitx-preflight). Copy the folder into .clodds/skills/ to run KushBitx Preflight before signing Base transactions. Not part of CloddsBot and not endorsed by its maintainers.
+- Franklin PreSpend hook (optional, external): [integrations/franklin/kushbitx-token-risk](integrations/franklin/kushbitx-token-risk). Screens the token a Base0xSwap buys with KushBitx Token Risk before the swap runs. It sees token names, not the transaction; read its limits first. Not part of Franklin and not endorsed by BlockRun.
 - Contact: Admin@kushbitx.com
 
 ## Community contributions
