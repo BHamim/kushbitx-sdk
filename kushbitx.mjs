@@ -4,7 +4,9 @@ const PAID_SERVICES = Object.freeze({
   'transaction-preflight': '/api/transaction-preflight',
   payment: '/api/verify-payment',
   'payment-proof': '/api/verify-payment',
-  'verify-payment': '/api/verify-payment'
+  'verify-payment': '/api/verify-payment',
+  // KushBitx Preflight (0.005 USDC): one verdict before money moves. 'preflight' stays Transaction Preflight.
+  'kushbitx-preflight': '/api/preflight'
 });
 
 function required(value, name) {
@@ -123,3 +125,20 @@ export class KushBitxClient {
 }
 
 export const paidServices = PAID_SERVICES;
+
+// Preflight 1.1: the digest the service returns in transactionDigest. Compute it from the transaction you are about
+// to sign; sign only when it matches an ALLOW verdict that has not expired.
+// sha256 of JSON {chainId,from,to,value,data} in that key order; from, to and data lowercase; value a decimal wei string.
+export async function preflightDigest({ from = null, to, value = '0', data = '0x' }) {
+  const canonical = JSON.stringify({ chainId: 8453, from: from ? String(from).toLowerCase() : null, to: required(to, 'to').toLowerCase(), value: BigInt(value || '0').toString(), data: String(data || '0x').toLowerCase() });
+  const subtle = globalThis.crypto?.subtle ?? (await import('node:crypto')).webcrypto.subtle;
+  const hash = await subtle.digest('SHA-256', new TextEncoder().encode(canonical));
+  return '0x' + Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** True only for an ALLOW verdict on this exact transaction, before expiresAt. Anything else: do not sign. */
+export async function canSign(report, transaction, now = Date.now()) {
+  if (!report || report.verdict !== 'ALLOW' || typeof report.transactionDigest !== 'string') return false;
+  if (!report.expiresAt || !(Date.parse(report.expiresAt) > now)) return false;
+  return report.transactionDigest === await preflightDigest(transaction);
+}

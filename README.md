@@ -12,6 +12,7 @@ Zero-dependency ESM client and runnable Node.js example for the complete KushBit
 | Token-risk report | 0.001 USDC | Receive structured token-risk evidence with missing checks identified. |
 | Transaction preflight | 0.001 USDC | Inspect an unsigned Base transaction before signing. |
 | Payment verification | 0.00288 USDC | Verify an existing Base USDC payment against the expected recipient and amount. |
+| KushBitx Preflight | 0.005 USDC | One verdict (ALLOW, REVIEW, BLOCK) before money moves, fail-closed: transaction simulation, approval and transfer decoding, token and recipient screening, optional protected SpendGuard policy. Does not detect prompt injection (use Protected SpendGuard). Service name `kushbitx-preflight`. |
 
 Paid endpoints use x402 and require explicit payment. There is no subscription. A delivered report can be `INCOMPLETE` when evidence is unavailable and may still incur the displayed fee.
 
@@ -32,6 +33,38 @@ console.log(preview);
 ```
 
 The SDK never requests, stores, or signs with a private key. It can discover an x402 challenge, prepare recovery, submit an externally signed payment authorization, and recover a report.
+
+## TypeScript
+
+Types ship with the package (`kushbitx.d.ts`), including `PreflightInput` and `PreflightReport`:
+
+```ts
+import { KushBitxClient, type PreflightInput } from '@kushbitx/sdk';
+
+const kushbitx = new KushBitxClient();
+const input: PreflightInput = { chainId: 8453, to: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', data: '0x', intent: 'contract_call' };
+const { challenge } = await kushbitx.getPaymentChallenge('kushbitx-preflight', input); // HTTP 402, nothing charged
+```
+
+### Preflight 1.1: sign only the transaction that was checked
+
+Send `from`; without it the verdict is REVIEW. Each response has `transactionDigest` and `expiresAt` (60 seconds). For swaps, add `expectedTokenOut`, and optionally `minAmountOut` and `expectedRecipient`.
+
+```js
+import { canSign } from '@kushbitx/sdk';
+
+const tx = { from: wallet, to, value: '0', data };   // the exact unsigned transaction
+// ... pay for POST /api/preflight with your x402 client, get `report` ...
+if (await canSign(report, tx)) {
+  // ALLOW, same digest, not expired: sign now
+} else {
+  // REVIEW, BLOCK, changed transaction or expired: do not sign
+}
+```
+
+Required checks per transaction type: `requiredChecks` in https://kushbitx.com/api/services.
+
+Current prices: https://kushbitx.com/api/services
 
 ## Runnable example
 

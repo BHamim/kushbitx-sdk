@@ -1,8 +1,8 @@
-// SDK 0.1.2: invalid JSON is never hidden and a null/non-object body is never a success.
+// SDK 0.1.2+: invalid JSON is never hidden and a null/non-object body is never a success.
 // Run: node --test test/sdk.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { KushBitxClient } from '../kushbitx.mjs';
+import { KushBitxClient, preflightDigest, canSign } from '../kushbitx.mjs';
 
 const client = (body, status = 200, headers = {}) => new KushBitxClient({
   fetchFn: async () => new Response(body, { status, headers })
@@ -44,4 +44,16 @@ test('402 challenge needs a JSON object body', async () => {
 test('restore accepts 202 with a JSON object and rejects 202 null', async () => {
   assert.deepEqual(await client('{"status":"pending"}', 202).restoreReport({ id: 'a', key: 'b' }), { status: 'pending' });
   await assert.rejects(client('null', 202).restoreReport({ id: 'a', key: 'b' }), /HTTP 202/);
+});
+
+// Preflight 1.1: the SDK digest equals the one the service returned on staging for the same USDC transfer (2026-10-31).
+const TX = { from: '0x0d68028d06af13379C872FEE032568B4Be712f22', to: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', value: '0', data: '0xa9059cbb000000000000000000000000d2db751a2fdba554706fb535438d81d3a0b4297900000000000000000000000000000000000000000000000000000000000003e8' };
+test('preflightDigest matches the service digest; canSign needs ALLOW, the same transaction and time left', async () => {
+  const digest = await preflightDigest(TX);
+  assert.match(digest, /^0xaf8cc51219f597/);
+  const later = new Date(Date.now() + 60000).toISOString();
+  assert.equal(await canSign({ verdict: 'ALLOW', transactionDigest: digest, expiresAt: later }, TX), true);
+  assert.equal(await canSign({ verdict: 'ALLOW', transactionDigest: digest, expiresAt: later }, { ...TX, value: '1' }), false);
+  assert.equal(await canSign({ verdict: 'REVIEW', transactionDigest: digest, expiresAt: later }, TX), false);
+  assert.equal(await canSign({ verdict: 'ALLOW', transactionDigest: digest, expiresAt: new Date(Date.now() - 1).toISOString() }, TX), false);
 });

@@ -1,18 +1,49 @@
 {
   "name": "@kushbitx/agentkit",
-  "version": "0.1.0",
-  "description": "Coinbase AgentKit action provider for KushBitx: free SpendGuard spend-policy checks and pay-per-call x402 token risk, transaction preflight, Quick Check and payment verification on Base.",
+  "version": "0.1.1",
+  "description": "Coinbase AgentKit action provider for KushBitx: free SpendGuard spend-policy checks and pay-per-call x402 checks on Base: KushBitx Preflight (one verdict before money moves), token risk, transaction preflight, Quick Check and payment verification.",
   "type": "module",
   "main": "./index.mjs",
-  "exports": { ".": "./index.mjs" },
-  "files": ["index.mjs", "README.md", "LICENSE"],
-  "keywords": ["agentkit", "coinbase", "x402", "base", "usdc", "ai-agents", "spendguard", "kushbitx"],
+  "exports": {
+    ".": "./index.mjs"
+  },
+  "files": [
+    "index.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "agentkit",
+    "coinbase",
+    "x402",
+    "base",
+    "usdc",
+    "ai-agents",
+    "spendguard",
+    "kushbitx",
+    "preflight"
+  ],
   "homepage": "https://kushbitx.com/developers",
-  "bugs": { "email": "admin@kushbitx.com" },
+  "bugs": {
+    "email": "admin@kushbitx.com"
+  },
   "license": "Apache-2.0",
-  "engines": { "node": ">=20" },
-  "peerDependencies": { "@coinbase/agentkit": ">=0.10.0", "zod": ">=3.23.0" },
-  "dependencies": { "@x402/evm": "^2.7.0", "@x402/fetch": "^2.7.0" },
-  "devDependencies": { "@coinbase/agentkit": "^0.10.4", "zod": "^3.25.0" },
-  "scripts": { "test": "node --test test/*.test.mjs" }
+  "engines": {
+    "node": ">=20"
+  },
+  "peerDependencies": {
+    "@coinbase/agentkit": ">=0.10.0",
+    "zod": ">=3.23.0"
+  },
+  "dependencies": {
+    "@x402/evm": "^2.7.0",
+    "@x402/fetch": "^2.7.0"
+  },
+  "devDependencies": {
+    "@coinbase/agentkit": "^0.10.4",
+    "zod": "^3.25.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
 }
