@@ -66,6 +66,7 @@ import { KushBitxClient } from 'https://kushbitx.com/sdk/kushbitx.mjs';
 - Tools: https://kushbitx.com/#tools
 - SpendGuard: https://kushbitx.com/spendguard
 - Integration example: https://kushbitx.com/examples/agent.mjs
+- Clodds skill (optional, external): [integrations/clodds/kushbitx-preflight](integrations/clodds/kushbitx-preflight). Copy the folder into .clodds/skills/ to run KushBitx Preflight before signing Base transactions. Not part of CloddsBot and not endorsed by its maintainers.
 - Contact: Admin@kushbitx.com
 
 ## Community contributions
