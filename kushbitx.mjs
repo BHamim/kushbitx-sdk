@@ -129,16 +129,38 @@ export const paidServices = PAID_SERVICES;
 // Preflight 1.1: the digest the service returns in transactionDigest. Compute it from the transaction you are about
 // to sign; sign only when it matches an ALLOW verdict that has not expired.
 // sha256 of JSON {chainId,from,to,value,data} in that key order; from, to and data lowercase; value a decimal wei string.
-export async function preflightDigest({ from = null, to, value = '0', data = '0x' }) {
-  const canonical = JSON.stringify({ chainId: 8453, from: from ? String(from).toLowerCase() : null, to: required(to, 'to').toLowerCase(), value: BigInt(value || '0').toString(), data: String(data || '0x').toLowerCase() });
+// The transaction's own chainId goes into the digest (default 8453 when absent), so a report for Base never
+// matches the same fields on another network.
+const BASE_CHAIN_ID = 8453;
+function chainIdOf(transaction) {
+  const raw = transaction?.chainId;
+  if (raw === undefined || raw === null) return BASE_CHAIN_ID;
+  if (typeof raw === 'bigint') return Number(raw);
+  if (typeof raw === 'string' && /^0x[0-9a-f]+$/i.test(raw)) return Number(BigInt(raw));
+  if (typeof raw === 'string' && /^[0-9]+$/.test(raw)) return Number(raw);
+  if (typeof raw === 'number' && Number.isInteger(raw)) return raw;
+  return NaN;
+}
+export async function preflightDigest(transaction) {
+  const { from = null, to, value = '0', data = '0x' } = transaction || {};
+  const chainId = chainIdOf(transaction);
+  if (!Number.isInteger(chainId)) throw new Error('chainId must be an integer');
+  const canonical = JSON.stringify({ chainId, from: from ? String(from).toLowerCase() : null, to: required(to, 'to').toLowerCase(), value: BigInt(value || '0').toString(), data: String(data || '0x').toLowerCase() });
   const subtle = globalThis.crypto?.subtle ?? (await import('node:crypto')).webcrypto.subtle;
   const hash = await subtle.digest('SHA-256', new TextEncoder().encode(canonical));
   return '0x' + Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, '0')).join('');
 }
 
-/** True only for an ALLOW verdict on this exact transaction, before expiresAt. Anything else: do not sign. */
+/** True only for an ALLOW verdict on this exact Base transaction (chainId 8453, stated), before expiresAt. Anything else: do not sign. */
 export async function canSign(report, transaction, now = Date.now()) {
-  if (!report || report.verdict !== 'ALLOW' || typeof report.transactionDigest !== 'string') return false;
+  if (!report || typeof report !== 'object' || report.verdict !== 'ALLOW' || typeof report.transactionDigest !== 'string') return false;
+  // The transaction must state chainId 8453; a missing chainId is never assumed to be Base.
+  if (!transaction || typeof transaction !== 'object' || transaction.chainId === undefined || transaction.chainId === null || chainIdOf(transaction) !== BASE_CHAIN_ID) return false;
+  if (report.chainId !== undefined && Number(report.chainId) !== BASE_CHAIN_ID) return false;
   if (!report.expiresAt || !(Date.parse(report.expiresAt) > now)) return false;
-  return report.transactionDigest === await preflightDigest(transaction);
+  try {
+    return report.transactionDigest.toLowerCase() === await preflightDigest(transaction);
+  } catch {
+    return false;
+  }
 }

@@ -14,7 +14,7 @@ const wallet = (chainId = 8453) => ({
 });
 const requirement = (amount = '1000', payTo = PAY_TO) => ({ scheme: 'exact', network: BASE_NETWORK, amount, asset: USDC_BASE, payTo, maxTimeoutSeconds: 300, extra: { name: 'USD Coin', version: '2' } });
 
-function server({ amount = '1000', payTo = PAY_TO, report = null } = {}) {
+function server({ amount = '1000', payTo = PAY_TO, report = null, paidStatus = 200, ordersDown = false, throwAfterSign = false } = {}) {
   const seen = [];
   const fetch = async (input, init = {}) => {
     // The x402 wrapper passes a Request; our provider passes (url, init). Read both.
@@ -22,10 +22,13 @@ function server({ amount = '1000', payTo = PAY_TO, report = null } = {}) {
     const url = req.url, headers = req.headers, body = req.method === 'POST' ? await req.text() : undefined;
     seen.push({ url, method: req.method, channel: headers.get('x-kushbitx-channel'), ua: headers.get('user-agent'), signature: headers.get('PAYMENT-SIGNATURE'), body });
     if (String(url).endsWith('/api/spendguard/evaluate')) return new Response(JSON.stringify({ decision: 'APPROVE', advisory: true }), { status: 200 });
+    if (String(url).endsWith('/api/orders')) return ordersDown ? new Response('{}', { status: 503 }) : new Response(JSON.stringify({ id: 'rid-1', key: 'rkey-1', expiresAt: '2026-11-01T00:00:00Z' }), { status: 201 });
     if (!headers.get('PAYMENT-SIGNATURE')) {
       const required = { x402Version: 2, error: 'Payment required', resource: { url: String(url), description: 'x', mimeType: 'application/json' }, accepts: [requirement(amount, payTo)] };
       return new Response(JSON.stringify(required), { status: 402, headers: { 'PAYMENT-REQUIRED': btoa(JSON.stringify(required)) } });
     }
+    if (throwAfterSign) throw new TypeError('fetch failed');
+    if (paidStatus !== 200) return new Response(JSON.stringify({ error: 'Upstream provider unavailable' }), { status: paidStatus });
     return new Response(JSON.stringify(report ? report(JSON.parse(body || '{}')) : { status: 'PASS', receipt: { reportId: 'r1' } }), { status: 200 });
   };
   return { fetch, seen };
@@ -58,11 +61,13 @@ test('paid token risk: one signed retry for exactly 1000 to PAY_TO', async () =>
   const s = server();
   const out = JSON.parse(await actions({ fetch: s.fetch }).kushbitx_token_risk.invoke({ address: USDC_BASE }));
   assert.equal(out.status, 'PASS');
-  assert.equal(s.seen.length, 2);
-  const payload = JSON.parse(atob(s.seen[1].signature));
+  // 0.1.2: recovery is prepared first (POST /api/orders), then the 402 probe, then one signed retry.
+  assert.equal(s.seen.length, 3);
+  assert.ok(s.seen[0].url.endsWith('/api/orders') && !s.seen[0].signature);
+  const payload = JSON.parse(atob(s.seen[2].signature));
   assert.equal(payload.payload.authorization.value, '1000');
   assert.equal(payload.payload.authorization.to.toLowerCase(), PAY_TO.toLowerCase());
-  assert.equal(s.seen[1].channel, 'agentkit');
+  assert.equal(s.seen[2].channel, 'agentkit');
 });
 
 test('price above the cap: refused before signing', async () => {
@@ -104,4 +109,64 @@ test('Preflight 1.1: canSign only for ALLOW on the same digest before expiresAt'
   assert.equal((await run(() => ({ verdict: 'ALLOW', transactionDigest: '0x' + '0'.repeat(64), expiresAt: later }))).canSign, false);
   assert.equal((await run(input => ({ verdict: 'REVIEW', transactionDigest: preflightDigest(input), expiresAt: later }))).canSign, false);
   assert.equal((await run(input => ({ verdict: 'ALLOW', transactionDigest: preflightDigest(input), expiresAt: new Date(Date.now() - 1).toISOString() }))).canSign, false);
+});
+
+test('0.1.2: recovery is prepared before signing; "not paid" only when nothing was signed, otherwise "unknown" with restore steps', async () => {
+  const noRecovery = JSON.parse(await actions({ fetch: server({ ordersDown: true }).fetch }).kushbitx_token_risk.invoke({ address: USDC_BASE }));
+  assert.equal(noRecovery.paymentStatus, 'not_paid');
+  const capped = server({ amount: '20000' });
+  const refused = JSON.parse(await actions({ fetch: capped.fetch, maxPaymentUsdc: '0.01' }).kushbitx_quick_check.invoke({}));
+  assert.equal(refused.paymentStatus, 'not_paid');
+  assert.ok(capped.seen.every(r => !r.signature));
+  const upstream = JSON.parse(await actions({ fetch: server({ paidStatus: 502 }).fetch }).kushbitx_token_risk.invoke({ address: USDC_BASE }));
+  assert.equal(upstream.paymentStatus, 'unknown');
+  assert.doesNotMatch(upstream.message, /not made/i);
+  assert.deepEqual(upstream.recovery.body, { id: 'rid-1', key: 'rkey-1' });
+  const dropped = JSON.parse(await actions({ fetch: server({ throwAfterSign: true }).fetch }).kushbitx_token_risk.invoke({ address: USDC_BASE }));
+  assert.equal(dropped.paymentStatus, 'unknown');
+  assert.match(dropped.recovery.restore, /\/api\/orders\/recover$/);
+  const rejected = JSON.parse(await actions({ fetch: server({ paidStatus: 402 }).fetch }).kushbitx_token_risk.invoke({ address: USDC_BASE }));
+  assert.equal(rejected.paymentStatus, 'not_paid');
+});
+
+test('0.1.2: canSign is false for another chainId or a report for another chain', async () => {
+  const later = new Date(Date.now() + 60000).toISOString();
+  const tx = { chainId: 8453, from: PAY_TO, to: USDC_BASE, value: '0', data: '0x', intent: 'transfer' };
+  const run = async report => JSON.parse(await actions({ fetch: server({ amount: '5000', report }).fetch }).kushbitx_preflight_transaction.invoke(tx));
+  assert.equal((await run(input => ({ verdict: 'ALLOW', chainId: 8453, transactionDigest: preflightDigest(input), expiresAt: later }))).canSign, true);
+  assert.equal((await run(input => ({ verdict: 'ALLOW', chainId: 1, transactionDigest: preflightDigest(input), expiresAt: later }))).canSign, false);
+  assert.notEqual(preflightDigest({ ...tx, chainId: 1 }), preflightDigest(tx));
+});
+
+test('0.1.2: a server report cannot override the locally computed canSign or digestMatches', async () => {
+  const later = new Date(Date.now() + 60000).toISOString();
+  const tx = { chainId: 8453, from: PAY_TO, to: USDC_BASE, value: '0', data: '0x', intent: 'transfer' };
+  const run = async report => JSON.parse(await actions({ fetch: server({ amount: '5000', report }).fetch }).kushbitx_preflight_transaction.invoke(tx));
+  // A REVIEW report that claims canSign and digestMatches.
+  const forged = await run(() => ({ verdict: 'REVIEW', canSign: true, digestMatches: true, transactionDigest: '0x' + '0'.repeat(64), expiresAt: later }));
+  assert.equal(forged.canSign, false);
+  assert.equal(forged.digestMatches, false);
+  assert.deepEqual(forged.server, { canSign: true, digestMatches: true });
+  // An ALLOW report with a wrong digest that claims canSign.
+  const wrongDigest = await run(() => ({ verdict: 'ALLOW', canSign: true, transactionDigest: '0x' + '1'.repeat(64), expiresAt: later }));
+  assert.equal(wrongDigest.canSign, false);
+  // A genuine ALLOW that claims canSign false still gets the local answer.
+  const genuine = await run(input => ({ verdict: 'ALLOW', canSign: false, chainId: 8453, transactionDigest: preflightDigest(input), expiresAt: later }));
+  assert.equal(genuine.canSign, true);
+  assert.equal(genuine.server.canSign, false);
+  // Keys order: the local fields come last, so no later spread can replace them.
+  const keys = Object.keys(forged);
+  assert.deepEqual(keys.slice(-2), ['canSign', 'digestMatches']);
+});
+
+test('0.1.2: a missing chainId never signs', async () => {
+  const later = new Date(Date.now() + 60000).toISOString();
+  const { kushbitxActionProvider: provider } = await import('../index.mjs');
+  const tx = { from: PAY_TO, to: USDC_BASE, value: '0', data: '0x' };
+  const action = provider({ fetch: server({ amount: '5000', report: input => ({ verdict: 'ALLOW', transactionDigest: preflightDigest({ ...input, chainId: 8453 }), expiresAt: later }) }).fetch }).getActions(wallet()).find(a => a.name.endsWith('kushbitx_preflight_transaction'));
+  // chainId has no default in the schema: AgentKit refuses the call, and a direct call never signs.
+  let out = null;
+  try { out = JSON.parse(await action.invoke(tx)); } catch { out = null; }
+  assert.ok(out === null || out.canSign === false, JSON.stringify(out));
+  assert.equal(action.schema.safeParse(tx).success, false, 'the schema requires chainId');
 });

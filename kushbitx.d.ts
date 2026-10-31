@@ -123,9 +123,9 @@ export interface PaymentChallenge {
 export interface RecoveryCredentials { id: string; key: string; [k: string]: unknown }
 
 /** The digest KushBitx Preflight returns in transactionDigest, computed locally from the transaction you will sign. */
-export declare function preflightDigest(transaction: { from?: Address | null; to: Address; value?: string; data?: string }): Promise<`0x${string}`>;
-/** True only for ALLOW on this exact transaction before expiresAt. */
-export declare function canSign(report: PreflightReport | Record<string, unknown>, transaction: { from?: Address | null; to: Address; value?: string; data?: string }, now?: number): Promise<boolean>;
+export declare function preflightDigest(transaction: { chainId?: number | string | bigint; from?: Address | null; to: Address; value?: string; data?: string }): Promise<`0x${string}`>;
+/** True only for ALLOW on this exact Base transaction before expiresAt. chainId must be stated and be 8453; a missing or other chainId, or any changed field, is false. */
+export declare function canSign(report: PreflightReport | Record<string, unknown>, transaction: { chainId: number | string | bigint; from?: Address | null; to: Address; value?: string; data?: string }, now?: number): Promise<boolean>;
 
 export declare class KushBitxClient {
   constructor(options?: ClientOptions);

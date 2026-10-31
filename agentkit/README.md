@@ -35,6 +35,16 @@ const agentkit = await AgentKit.from({
 
 `kushbitx_preflight_transaction` returns `canSign`. It is true only for ALLOW on the exact transaction the agent sent (same `transactionDigest`), before `expiresAt` (60 seconds). Send `from`, otherwise the verdict is REVIEW. For swaps add `expectedTokenOut`, and optionally `minAmountOut` and `expectedRecipient`.
 
+## Payment status and recovery (0.1.2)
+
+Before signing a payment, each paid action prepares recovery credentials (`POST /api/orders`) and sends them with the paid request. The result says `paymentStatus`:
+
+- `not_paid`: nothing was signed, or the server rejected the authorization before settlement.
+- `unknown`: an authorization was signed but no report arrived. **Do not pay again.** Follow `recovery` (`POST /api/orders/recover` with the given id and key) to get the report if the payment settled.
+- `pending`: the report is still processing; restore it the same way.
+
+`chainId: 8453` is required in the action input (it is never assumed). `canSign` is false for any other chainId and for a report for another chain. `canSign` and `digestMatches` are always computed locally and written last; if the server sends fields with those names, they are kept only under `server` for diagnosis.
+
 ## Safety limits
 
 - **Per-call caps:** `maxPaymentUsdc` (default `0.005`, enough for every check including `kushbitx_preflight_transaction`). `maxPreflightUsdc` can set a separate cap for Preflight. A higher price is refused before anything is signed; the caps protect you if a price changes.

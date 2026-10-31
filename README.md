@@ -48,17 +48,17 @@ const { challenge } = await kushbitx.getPaymentChallenge('kushbitx-preflight', i
 
 ### Preflight 1.1: sign only the transaction that was checked
 
-Send `from`; without it the verdict is REVIEW. Each response has `transactionDigest` and `expiresAt` (60 seconds). For swaps, add `expectedTokenOut`, and optionally `minAmountOut` and `expectedRecipient`.
+Send `from`; without it the verdict is REVIEW. `canSign` needs the transaction to state `chainId: 8453`; a missing or other chainId is never accepted. Each response has `transactionDigest` and `expiresAt` (60 seconds). For swaps, add `expectedTokenOut`, and optionally `minAmountOut` and `expectedRecipient`.
 
 ```js
 import { canSign } from '@kushbitx/sdk';
 
-const tx = { from: wallet, to, value: '0', data };   // the exact unsigned transaction
+const tx = { chainId: 8453, from: wallet, to, value: '0', data };   // the exact unsigned transaction
 // ... pay for POST /api/preflight with your x402 client, get `report` ...
 if (await canSign(report, tx)) {
   // ALLOW, same digest, not expired: sign now
 } else {
-  // REVIEW, BLOCK, changed transaction or expired: do not sign
+  // REVIEW, BLOCK, another network, changed transaction or expired: do not sign
 }
 ```
 

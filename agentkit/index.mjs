@@ -12,7 +12,7 @@ export const KUSHBITX_ORIGIN = 'https://kushbitx.com';
 export const PAY_TO = '0x0d68028d06af13379C872FEE032568B4Be712f22';
 export const USDC_BASE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 export const BASE_NETWORK = 'eip155:8453';
-const VERSION = '0.1.1';
+const VERSION = '0.1.2';
 const address = z.string().regex(/^0x[a-fA-F0-9]{40}$/, 'a 0x-prefixed 40-hex address');
 
 /** Accept only our exact requirement: Base USDC, paid to KushBitx, at or below the per-call cap (atomic units). */
@@ -51,17 +51,27 @@ const SPENDGUARD = z.object({
  * @param {Record<string,string>} [options.headers] Extra request headers, e.g. {"x-kushbitx-traffic": "test"}.
  */
 /** Preflight 1.1 digest: sha256 of JSON {chainId,from,to,value,data}; from, to and data lowercase; value in decimal wei. */
-export function preflightDigest({ from = null, to, value = '0', data = '0x' }) {
-  return '0x' + createHash('sha256').update(JSON.stringify({ chainId: 8453, from: from ? String(from).toLowerCase() : null, to: String(to).toLowerCase(), value: BigInt(value || '0').toString(), data: String(data || '0x').toLowerCase() })).digest('hex');
+// The transaction's own chainId is part of the digest (default 8453), so a Base report never matches another network.
+export function preflightDigest({ chainId = 8453, from = null, to, value = '0', data = '0x' }) {
+  return '0x' + createHash('sha256').update(JSON.stringify({ chainId: Number(chainId), from: from ? String(from).toLowerCase() : null, to: String(to).toLowerCase(), value: BigInt(value || '0').toString(), data: String(data || '0x').toLowerCase() })).digest('hex');
 }
 // Adds canSign: true only for ALLOW whose digest matches the transaction the agent sent, before expiresAt.
 function withSignDecision(text, args) {
   let report;
   try { report = JSON.parse(text); } catch { return text; }
   if (!report || typeof report !== 'object' || !report.verdict) return text;
-  const digestMatches = report.transactionDigest === preflightDigest(args);
-  const canSign = report.verdict === 'ALLOW' && digestMatches && Date.parse(report.expiresAt) > Date.now();
-  return JSON.stringify({ canSign, digestMatches, ...report }, null, 2);
+  let digestMatches = false;
+  try { digestMatches = typeof report.transactionDigest === 'string' && report.transactionDigest.toLowerCase() === preflightDigest(args); } catch { digestMatches = false; }
+  // The network must be stated and be Base; a report for another chain never signs.
+  const onBase = args?.chainId !== undefined && args?.chainId !== null && Number(args.chainId) === 8453 && (report.chainId === undefined || Number(report.chainId) === 8453);
+  const canSign = report.verdict === 'ALLOW' && onBase && digestMatches && Date.parse(report.expiresAt) > Date.now();
+  // Locally computed decisions are written last and never taken from the server. Server fields with the same
+  // names are kept only under server.* for diagnosis.
+  const { canSign: serverCanSign, digestMatches: serverDigestMatches, ...rest } = report;
+  const server = { ...(rest.server && typeof rest.server === 'object' ? rest.server : {}) };
+  if ('canSign' in report) server.canSign = serverCanSign;
+  if ('digestMatches' in report) server.digestMatches = serverDigestMatches;
+  return JSON.stringify({ ...rest, ...(Object.keys(server).length ? { server } : {}), canSign, digestMatches }, null, 2);
 }
 
 export function kushbitxActionProvider(options = {}) {
@@ -72,13 +82,15 @@ export function kushbitxActionProvider(options = {}) {
   const baseFetch = options.fetch || globalThis.fetch;
   const headers = { ...(options.headers || {}), 'x-kushbitx-channel': 'agentkit', 'user-agent': 'kushbitx-agentkit/' + VERSION };
 
-  const call = async (doFetch, path, method, body) => {
-    const response = await doFetch(origin + path, { method, headers: { ...headers, ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  const call = async (doFetch, path, method, body, extra = {}) => {
+    const response = await doFetch(origin + path, { method, headers: { ...headers, ...extra, ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
     const data = await response.json().catch(() => ({}));
     if (response.status === 200) return JSON.stringify(data, null, 2);
     if (response.status === 202) return JSON.stringify({ status: 'pending', reportId: data.reportId, message: 'Payment or report processing is pending. Do not pay again; restore with POST ' + origin + '/api/orders/recover.' });
     return JSON.stringify({ error: true, status: response.status, message: data.error || 'Request failed' });
   };
+  // Recovery steps an agent can follow when the payment outcome is not known. Never pay again before restoring.
+  const restoreSteps = recovery => ({ restore: 'POST ' + origin + '/api/orders/recover', body: { id: recovery.reportId, key: recovery.recoveryKey }, note: 'Do not pay again. Restoring returns the report if the payment settled; add txHash if you have it.' });
 
   const paid = (path, method, cap = maxAtomic, capText = options.maxPaymentUsdc ?? '0.005') => async (walletProvider, args) => {
     if (!(walletProvider instanceof EvmWalletProvider) && typeof walletProvider?.toSigner !== 'function') return JSON.stringify({ error: true, message: 'KushBitx paid checks need an EVM wallet provider on Base.' });
@@ -89,11 +101,35 @@ export function kushbitxActionProvider(options = {}) {
     const client = new x402Client();
     registerExactEvmScheme(client, { signer });
     client.registerPolicy(paymentPolicy(cap));
+    // "Payment not made" is said only when no payment authorization was signed in this call.
+    let signed = false;
+    client.onAfterPaymentCreation(async () => { signed = true; });
+    const input = method === 'POST' ? args : {};
+    // Recovery credentials are prepared before anything is signed, so an interrupted call can be restored without paying twice.
+    let recovery = null;
     try {
-      return await call(wrapFetchWithPayment(baseFetch, client), path, method, method === 'POST' ? args : undefined);
+      const prepared = await baseFetch(origin + '/api/orders', { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ path, input }) });
+      if (prepared.status === 201) {
+        const p = await prepared.json();
+        if (p?.id && p?.key) recovery = { reportId: p.id, recoveryKey: p.key, expiresAt: p.expiresAt ?? null };
+      }
+    } catch { recovery = null; }
+    if (!recovery) return JSON.stringify({ error: true, paymentStatus: 'not_paid', message: 'Payment not made: report recovery could not be prepared, so nothing was signed. Try again later.' });
+    const auth = { 'Report-Id': recovery.reportId, 'Recovery-Key': recovery.recoveryKey };
+    let text;
+    try {
+      text = await call(wrapFetchWithPayment(baseFetch, client), path, method, method === 'POST' ? args : undefined, auth);
     } catch (error) {
-      return JSON.stringify({ error: true, message: 'Payment not made: ' + (error?.message || 'x402 payment failed') + '. Limit: ' + capText + ' USDC per call, Base USDC to KushBitx only.' });
+      if (!signed) return JSON.stringify({ error: true, paymentStatus: 'not_paid', message: 'Payment not made: ' + (error?.message || 'x402 payment failed') + '. Limit: ' + capText + ' USDC per call, Base USDC to KushBitx only.' });
+      return JSON.stringify({ error: true, paymentStatus: 'unknown', message: 'Payment status unknown: a payment authorization was signed, but no report arrived (' + (error?.message || 'network error') + ').', recovery: restoreSteps(recovery) });
     }
+    let out;
+    try { out = JSON.parse(text); } catch { return text; }
+    if (!out?.error) return out?.status === 'pending' ? JSON.stringify({ ...out, paymentStatus: 'pending', recovery: restoreSteps(recovery) }) : text;
+    if (!signed) return JSON.stringify({ ...out, paymentStatus: 'not_paid', message: 'Payment not made: ' + out.message });
+    // A 402 after signing means the authorization was rejected before settlement; the server says no payment was taken.
+    if (out.status === 402) return JSON.stringify({ ...out, paymentStatus: 'not_paid', message: 'Payment not taken: ' + out.message });
+    return JSON.stringify({ ...out, paymentStatus: 'unknown', message: 'Payment status unknown: ' + out.message, recovery: restoreSteps(recovery) });
   };
 
   return customActionProvider([
@@ -103,7 +139,7 @@ export function kushbitxActionProvider(options = {}) {
       invoke: async args => call(baseFetch, '/api/spendguard/evaluate', 'POST', { ...args, chain: 'base', asset: 'USDC' }) },
     { name: 'kushbitx_preflight_transaction',
       description: 'Paid (0.005 USDC via x402 on Base). Call ONCE before signing any Base swap, transfer, approval or token buy, with the exact unsigned transaction and from (the signing wallet; without it the verdict is REVIEW). For swaps add expectedTokenOut, and optionally minAmountOut and expectedRecipient. Simulates the transaction and every transfer and approval it causes, screens the token and the recipient, and returns one verdict: ALLOW, REVIEW (ask the user; also when a check could not run) or BLOCK (do not sign). Sign only when canSign is true: ALLOW for this exact transaction, before expiresAt (60 seconds). It does not detect prompt injection.',
-      schema: z.object({ chainId: z.literal(8453).default(8453), to: address.describe('Contract or recipient address'), from: address.optional().describe('Signing wallet'), value: z.string().regex(/^[0-9]+$/).optional().describe('ETH value in wei'), data: z.string().regex(/^0x([0-9a-fA-F]{2})*$/).optional().describe('Unsigned calldata hex'), intent: z.enum(['swap', 'transfer', 'approve', 'buy_token', 'contract_call']).optional(), tokenAddress: address.optional().describe('Token to screen when it is not the destination'), amount: z.string().regex(/^[0-9]+(\.[0-9]{1,18})?$/).optional().describe('Amount in token units'), expectedRecipient: address.optional().describe('Swap: who must receive the output (default from)'), minAmountOut: z.string().regex(/^[0-9]+(\.[0-9]{1,36})?$/).optional().describe('Swap: smallest acceptable output, in token units'), expectedTokenOut: address.optional().describe('Swap: token the swap must deliver; 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE for native ETH') }),
+      schema: z.object({ chainId: z.literal(8453).describe('Base mainnet. Required: state it, it is never assumed'), to: address.describe('Contract or recipient address'), from: address.optional().describe('Signing wallet'), value: z.string().regex(/^[0-9]+$/).optional().describe('ETH value in wei'), data: z.string().regex(/^0x([0-9a-fA-F]{2})*$/).optional().describe('Unsigned calldata hex'), intent: z.enum(['swap', 'transfer', 'approve', 'buy_token', 'contract_call']).optional(), tokenAddress: address.optional().describe('Token to screen when it is not the destination'), amount: z.string().regex(/^[0-9]+(\.[0-9]{1,18})?$/).optional().describe('Amount in token units'), expectedRecipient: address.optional().describe('Swap: who must receive the output (default from)'), minAmountOut: z.string().regex(/^[0-9]+(\.[0-9]{1,36})?$/).optional().describe('Swap: smallest acceptable output, in token units'), expectedTokenOut: address.optional().describe('Swap: token the swap must deliver; 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE for native ETH') }),
       invoke: async (walletProvider, args) => withSignDecision(await paid('/api/preflight', 'POST', maxPreflightAtomic, options.maxPreflightUsdc ?? '0.005')(walletProvider, args), args) },
     { name: 'kushbitx_quick_check',
       description: 'Paid (0.001 USDC via x402 on Base). Confirms Base chain identity and the official USDC contract presence. Not a token-risk report.',
