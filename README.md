@@ -12,7 +12,7 @@ Zero-dependency ESM client and runnable Node.js example for the complete KushBit
 | Token-risk report | 0.001 USDC | Receive structured token-risk evidence with missing checks identified. |
 | Transaction preflight | 0.001 USDC | Inspect an unsigned Base transaction before signing. |
 | Payment verification | 0.00288 USDC | Verify an existing Base USDC payment against the expected recipient and amount. |
-| KushBitx Preflight | 0.005 USDC | One verdict (ALLOW, REVIEW, BLOCK) before money moves, fail-closed: transaction simulation, approval and transfer decoding, token and recipient screening, optional protected SpendGuard policy. Does not detect prompt injection (use Protected SpendGuard). Service name `kushbitx-preflight`. |
+| KushBitx Preflight | 0.005 USDC | One verdict (ALLOW, REVIEW, BLOCK) before money moves, fail-closed: transaction simulation, approval and transfer decoding, token and recipient screening, optional protected SpendGuard policy. Does not detect prompt injection; Protected SpendGuard can cap what an agent pays if your signer enforces it, but does not detect prompt injection either. Service name `kushbitx-preflight`. |
 
 Paid endpoints use x402 and require explicit payment. There is no subscription. A delivered report can be `INCOMPLETE` when evidence is unavailable and may still incur the displayed fee.
 
