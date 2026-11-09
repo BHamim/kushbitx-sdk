@@ -62,6 +62,24 @@ if (await canSign(report, tx)) {
 }
 ```
 
+### Signature Check: sign only the typed data that was checked
+
+Before an agent signs an EIP-712 request (an x402 payment authorisation, a Permit or a Permit2 message), pay 0.003 USDC for `POST /api/signature-check` with `{ chainId: 8453, signer, typedData }`. The report has `verdict`, `typedDataDigest` and `expiresAt`. `canSignTypedData` recomputes the EIP-712 digest locally and is true only for ALLOW on the same typed data, for the same signer, on Base (`chainId: 8453` in the request and in `typedData.domain`), before `expiresAt`.
+
+```js
+import { canSignTypedData } from '@kushbitx/sdk';
+
+const request = { chainId: 8453, signer: wallet, typedData };   // the exact object you are asked to sign
+// ... pay for POST /api/signature-check with your x402 client, get `report` ...
+if (await canSignTypedData(report, request)) {
+  // ALLOW, same digest, same signer, not expired: sign now
+} else {
+  // REVIEW, BLOCK, changed typed data, another signer or network, or expired: do not sign
+}
+```
+
+`typedDataDigest(typedData)` returns the same digest on its own. Neither function uses the network or a key.
+
 Required checks per transaction type: `requiredChecks` in https://kushbitx.com/api/services.
 
 Current prices: https://kushbitx.com/api/services

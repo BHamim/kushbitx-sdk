@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
-import { kushbitxActionProvider, paymentPolicy, preflightDigest, PAY_TO, USDC_BASE, BASE_NETWORK } from '../index.mjs';
+import { kushbitxActionProvider, paymentPolicy, preflightDigest, typedDataDigest, PAY_TO, USDC_BASE, BASE_NETWORK } from '../index.mjs';
 
 // No real network in tests: AgentKit's own analytics calls are blocked here; the provider uses the injected fetch.
 globalThis.fetch = async () => new Response(null, { status: 204 }); // swallowed, never sent
@@ -39,9 +39,9 @@ function server({ amount = '1000', payTo = PAY_TO, report = null, paidStatus = 2
 
 const actions = (opts, w = wallet()) => Object.fromEntries(kushbitxActionProvider(opts).getActions(w).map(a => [a.name.replace(/^.*?_kushbitx/, 'kushbitx'), a]));
 
-test('seven actions with KushBitx names (0.1.3 adds the free restore action)', () => {
+test('eight actions with KushBitx names (0.1.3 adds restore, 0.1.4 adds Signature Check)', () => {
   const names = Object.keys(actions({ fetch: server().fetch })).sort();
-  assert.deepEqual(names, ['kushbitx_preflight_transaction', 'kushbitx_quick_check', 'kushbitx_restore_report', 'kushbitx_spendguard_evaluate', 'kushbitx_token_risk', 'kushbitx_transaction_preflight', 'kushbitx_verify_payment']);
+  assert.deepEqual(names, ['kushbitx_preflight_transaction', 'kushbitx_quick_check', 'kushbitx_restore_report', 'kushbitx_signature_check', 'kushbitx_spendguard_evaluate', 'kushbitx_token_risk', 'kushbitx_transaction_preflight', 'kushbitx_verify_payment']);
 });
 
 test('free SpendGuard: no payment, agentkit channel header, chain and asset filled', async () => {
@@ -244,4 +244,26 @@ test('0.1.3 R04: invalid JSON with HTTP 200 is an explicit error, never an empty
     policy: { maxPerTransaction: '10', remainingDailyBudget: '50', requireHumanAbove: '25', maxRepeats: 3, allowedRecipients: [PAY_TO], blockUnknownRecipients: true } }));
   assert.equal(free.error, true);
   assert.match(free.message, /invalid JSON/);
+});
+
+test('0.1.4: kushbitx_signature_check pays 0.003 and canSign is local: ALLOW, same typed data, signer and Base domain, before expiresAt', async () => {
+  const later = new Date(Date.now() + 60000).toISOString();
+  const typedData = { domain: { name: 'USD Coin', version: '2', chainId: 8453, verifyingContract: USDC_BASE }, types: { TransferWithAuthorization: [{ name: 'from', type: 'address' }, { name: 'to', type: 'address' }, { name: 'value', type: 'uint256' }, { name: 'validAfter', type: 'uint256' }, { name: 'validBefore', type: 'uint256' }, { name: 'nonce', type: 'bytes32' }] }, primaryType: 'TransferWithAuthorization', message: { from: account.address, to: PAY_TO, value: '1000', validAfter: '0', validBefore: '1900000000', nonce: '0x' + 'ab'.repeat(32) } };
+  const args = { chainId: 8453, signer: account.address, typedData, expectedPayTo: PAY_TO, expectedAmount: '1000' };
+  const run = async (report, a = args) => { const srv = server({ amount: '3000', report }); const out = JSON.parse(await actions({ fetch: srv.fetch }).kushbitx_signature_check.invoke(a)); return { out, srv }; };
+  const good = input => ({ verdict: 'ALLOW', chainId: 8453, signer: input.signer.toLowerCase(), typedDataDigest: typedDataDigest(input.typedData), expiresAt: later });
+  const { out, srv } = await run(good);
+  assert.equal(out.canSign, true);
+  assert.equal(out.digestMatches, true);
+  assert.ok(srv.seen.some(r => r.url.endsWith('/api/signature-check') && r.signature), 'paid with x402');
+  assert.equal((await run(input => ({ ...good(input), verdict: 'REVIEW' }))).out.canSign, false, 'REVIEW');
+  assert.equal((await run(input => ({ ...good(input), typedDataDigest: '0x' + '0'.repeat(64) }))).out.canSign, false, 'other digest');
+  assert.equal((await run(input => ({ ...good(input), signer: '0x' + '3'.repeat(40) }))).out.canSign, false, 'other signer');
+  assert.equal((await run(input => ({ ...good(input), chainId: 1 }))).out.canSign, false, 'report for another chain');
+  assert.equal((await run(input => ({ ...good(input), expiresAt: new Date(Date.now() - 1).toISOString() }))).out.canSign, false, 'expired');
+  const otherDomain = { ...args, typedData: { ...typedData, domain: { ...typedData.domain, chainId: 1 } } };
+  assert.equal((await run(good, otherDomain)).out.canSign, false, 'domain on another chain');
+  const forged = (await run(input => ({ verdict: 'REVIEW', canSign: true, digestMatches: true, typedDataDigest: '0x' + '1'.repeat(64), expiresAt: later }))).out;
+  assert.equal(forged.canSign, false);
+  assert.deepEqual(forged.server, { canSign: true, digestMatches: true });
 });

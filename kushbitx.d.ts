@@ -1,11 +1,12 @@
-// Type declarations for @kushbitx/sdk 0.1.3. The SDK never requests, stores or signs with a private key.
+// Type declarations for @kushbitx/sdk 0.1.6. The SDK never requests, stores or signs with a private key.
 
 /** Paid service names accepted by the payment helpers, and the route each one calls. */
 export type PaidService =
   | 'token-risk'
   | 'preflight' | 'transaction-preflight'
   | 'payment' | 'payment-proof' | 'verify-payment'
-  | 'kushbitx-preflight';
+  | 'kushbitx-preflight'
+  | 'signature-check';
 
 export declare const paidServices: Readonly<Record<PaidService, string>>;
 
@@ -127,6 +128,17 @@ export declare function preflightDigest(transaction: { chainId?: number | string
 /** True only for ALLOW on this exact Base transaction before expiresAt. chainId must be stated and be 8453; a missing or other chainId, or any changed field, is false. */
 export declare function canSign(report: PreflightReport | Record<string, unknown>, transaction: { chainId: number | string | bigint; from?: Address | null; to: Address; value?: string; data?: string }, now?: number): Promise<boolean>;
 
+/** EIP-712 typed data: the exact object a wallet is asked to sign. */
+export interface TypedData { domain: { name?: string; version?: string; chainId?: number | string | bigint; verifyingContract?: Address; salt?: string }; types: Record<string, { name: string; type: string }[]>; primaryType: string; message: Record<string, unknown> }
+/** Input of Signature Check (0.003 USDC). */
+export interface SignatureCheckInput { chainId: 8453; signer: Address; typedData: TypedData; expectedPayTo?: Address; expectedAmount?: string; expectedSpender?: Address }
+/** Signature Check report (fields used by canSignTypedData). */
+export interface SignatureCheckReport { service: 'signature-check'; verdict: 'ALLOW' | 'REVIEW' | 'BLOCK'; typedDataDigest: `0x${string}`; chainId: 8453; signer: Address; expiresAt: string; kind: string; reasonCodes: string[]; [k: string]: unknown }
+/** EIP-712 digest of typed data, computed locally (no network). Equals typedDataDigest in a Signature Check report. Throws on malformed typed data. */
+export declare function typedDataDigest(typedData: TypedData): `0x${string}`;
+/** True only for ALLOW on this exact typed data, for this signer, before expiresAt. request.chainId and typedData.domain.chainId must both be 8453; anything else is false. */
+export declare function canSignTypedData(report: SignatureCheckReport | Record<string, unknown>, request: { chainId: number | string | bigint; signer: Address; typedData: TypedData }, now?: number): Promise<boolean>;
+
 export declare class KushBitxClient {
   constructor(options?: ClientOptions);
   baseUrl: string;
@@ -146,6 +158,7 @@ export declare class KushBitxClient {
 
   /** Ask for the x402 challenge (HTTP 402). Nothing is charged. */
   getPaymentChallenge(service: 'kushbitx-preflight', input: PreflightInput): Promise<PaymentChallenge>;
+  getPaymentChallenge(service: 'signature-check', input: SignatureCheckInput): Promise<PaymentChallenge>;
   getPaymentChallenge(service: 'token-risk', input: TokenInput): Promise<PaymentChallenge>;
   getPaymentChallenge(service: 'preflight' | 'transaction-preflight', input: TransactionInput): Promise<PaymentChallenge>;
   getPaymentChallenge(service: 'payment' | 'payment-proof' | 'verify-payment', input: PaymentProofInput): Promise<PaymentChallenge>;
@@ -153,6 +166,7 @@ export declare class KushBitxClient {
   prepareRecovery(service: PaidService, input: object): Promise<RecoveryCredentials>;
   /** Send an externally signed payment (PAYMENT-SIGNATURE). Returns the report, or a pending status (HTTP 202). */
   submitPaidCheck(service: 'kushbitx-preflight', input: PreflightInput, auth: { paymentSignature: string; reportId: string; recoveryKey: string }): Promise<PreflightReport | Record<string, unknown>>;
+  submitPaidCheck(service: 'signature-check', input: SignatureCheckInput, auth: { paymentSignature: string; reportId: string; recoveryKey: string }): Promise<SignatureCheckReport | Record<string, unknown>>;
   submitPaidCheck(service: PaidService, input: object, auth: { paymentSignature: string; reportId: string; recoveryKey: string }): Promise<Record<string, unknown>>;
   restoreReport(args: { id: string; key: string; txHash?: string }): Promise<Record<string, unknown>>;
 }

@@ -1,6 +1,6 @@
 {
   "name": "@kushbitx/sdk",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Zero-dependency ESM client for KushBitx AgentProof services on Base",
   "type": "module",
   "exports": {
@@ -26,6 +26,7 @@
     "payment-security",
     "spendguard",
     "preflight",
+    "eip712",
     "typescript"
   ],
   "homepage": "https://github.com/BHamim/kushbitx-sdk#readme",

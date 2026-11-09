@@ -1,7 +1,7 @@
 {
   "name": "@kushbitx/agentkit",
-  "version": "0.1.3",
-  "description": "Coinbase AgentKit action provider for KushBitx: free SpendGuard spend-policy checks and pay-per-call x402 checks on Base: KushBitx Preflight (one verdict before money moves), token risk, transaction preflight, Quick Check and payment verification.",
+  "version": "0.1.4",
+  "description": "Coinbase AgentKit action provider for KushBitx: free SpendGuard spend-policy checks and pay-per-call x402 checks on Base: KushBitx Preflight (one verdict before money moves), Signature Check (EIP-712), token risk, transaction preflight, Quick Check and payment verification.",
   "type": "module",
   "main": "./index.mjs",
   "exports": {

@@ -5,10 +5,11 @@
 | Action | Price | What it does |
 |---|---|---|
 | `kushbitx_preflight_transaction` | 0.005 USDC | **One call before money moves.** Simulates the unsigned transaction, decodes approvals and transfers, screens the token and the recipient, and returns ALLOW, REVIEW or BLOCK with sourced findings; fail-closed. Does not detect prompt injection. Base (chain 8453) only. |
+| `kushbitx_signature_check` | 0.003 USDC | Checks an EIP-712 signature request (x402 payment authorisation, EIP-2612 Permit, Permit2) before the wallet signs it: ALLOW, REVIEW or BLOCK bound to the EIP-712 digest, with a locally computed `canSign`. |
 | `kushbitx_spendguard_evaluate` | free | Checks a proposed Base USDC payment against your spending policy before paying: APPROVE, HUMAN_APPROVAL or BLOCK. |
 | `kushbitx_quick_check` | 0.001 USDC | Base chain identity and official USDC contract presence. |
 | `kushbitx_token_risk` | 0.001 USDC | Sellability, taxes, privileged controls, holder concentration and market risk for a Base token. |
-| `kushbitx_transaction_preflight` | 0.001 USDC | Simulates an unsigned Base transaction before you sign it. |
+| `kushbitx_transaction_preflight` | 0.001 USDC | Simulation Check: simulates an unsigned Base transaction before you sign it. |
 | `kushbitx_verify_payment` | 0.00288 USDC | Verifies a Base USDC transfer from its transaction hash. |
 | `kushbitx_restore_report` | free | Restores a paid report after `paymentStatus` "unknown" or "pending", from its `reportId`. Never pays again. |
 
@@ -35,6 +36,10 @@ const agentkit = await AgentKit.from({
 ## Preflight 1.1
 
 `kushbitx_preflight_transaction` returns `canSign`. It is true only for ALLOW on the exact transaction the agent sent (same `transactionDigest`), before `expiresAt` (60 seconds). Send `from`, otherwise the verdict is REVIEW. For swaps add `expectedTokenOut`, and optionally `minAmountOut` and `expectedRecipient`.
+
+## Signature Check (0.1.4)
+
+`kushbitx_signature_check` takes `{ chainId: 8453, signer, typedData }`, plus `expectedPayTo` and `expectedAmount` for payments or `expectedSpender` for permits. It returns `canSign` and `digestMatches`, computed locally like Preflight 1.1. `canSign` is true only for ALLOW on the exact typed data the agent sent (same EIP-712 `typedDataDigest`), for the same `signer`, with `chainId: 8453` in the input and in `typedData.domain`, before `expiresAt`. Typed data without a chain in its domain is never accepted. Server fields named `canSign` or `digestMatches` are kept only under `server`.
 
 ## Payment status and recovery
 
