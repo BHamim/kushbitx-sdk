@@ -246,12 +246,77 @@ export function typedDataDigest(typedData) {
   return '0x' + Array.from(digest, b => b.toString(16).padStart(2, '0')).join('');
 }
 
+// secp256k1 public-key recovery (no dependency), used only to verify KushBitx signed verdicts.
+const SECP_P = 2n ** 256n - 2n ** 32n - 977n;
+const SECP_N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
+const SECP_G = [0x79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798n, 0x483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8n];
+const modp = (a, m = SECP_P) => { const r = a % m; return r >= 0n ? r : r + m; };
+function modInv(a, m) { let [x, y, u, v] = [0n, 1n, m, modp(a, m)]; while (v !== 0n) { const q = u / v; [x, y] = [y, x - q * y]; [u, v] = [v, u - q * v]; } if (u !== 1n) throw new Error('no inverse'); return modp(x, m); }
+function modPow(b, e, m) { let r = 1n; b = modp(b, m); while (e > 0n) { if (e & 1n) r = r * b % m; b = b * b % m; e >>= 1n; } return r; }
+// Jacobian coordinates [X, Y, Z]; null is the point at infinity.
+function jDouble(P) { if (!P || P[1] === 0n) return null; const [X, Y, Z] = P; const S = modp(4n * X * Y * Y), M = modp(3n * X * X), X3 = modp(M * M - 2n * S); return [X3, modp(M * (S - X3) - 8n * Y ** 4n), modp(2n * Y * Z)]; }
+function jAdd(P, Q) {
+  if (!P) return Q; if (!Q) return P;
+  const [X1, Y1, Z1] = P, [X2, Y2, Z2] = Q, Z1s = modp(Z1 * Z1), Z2s = modp(Z2 * Z2);
+  const U1 = modp(X1 * Z2s), U2 = modp(X2 * Z1s), S1 = modp(Y1 * Z2s * Z2), S2 = modp(Y2 * Z1s * Z1);
+  if (U1 === U2) return S1 === S2 ? jDouble(P) : null;
+  const H = modp(U2 - U1), R = modp(S2 - S1), H2 = modp(H * H), H3 = modp(H2 * H), X3 = modp(R * R - H3 - 2n * U1 * H2);
+  return [X3, modp(R * (U1 * H2 - X3) - S1 * H3), modp(H * Z1 * Z2)];
+}
+function jMul(P, k) { let R = null, A = P; while (k > 0n) { if (k & 1n) R = jAdd(R, A); A = jDouble(A); k >>= 1n; } return R; }
+function toAffine(P) { if (!P) return null; const zi = modInv(P[2], SECP_P), zi2 = modp(zi * zi); return [modp(P[0] * zi2), modp(P[1] * zi2 * zi)]; }
+const hex32 = n => n.toString(16).padStart(64, '0');
+/** Address that produced a 65-byte r,s,v signature over a 32-byte digest, or null. Rejects high s and v other than 27/28. */
+export function recoverAddress(digestHex, signatureHex) {
+  try {
+    const sig = String(signatureHex).replace(/^0x/i, ''), dig = String(digestHex).replace(/^0x/i, '');
+    if (!/^[0-9a-f]{130}$/i.test(sig) || !/^[0-9a-f]{64}$/i.test(dig)) return null;
+    const r = BigInt('0x' + sig.slice(0, 64)), s = BigInt('0x' + sig.slice(64, 128)), v = parseInt(sig.slice(128), 16);
+    if ((v !== 27 && v !== 28) || r <= 0n || r >= SECP_N || s <= 0n || s > SECP_N / 2n) return null;
+    const y2 = modp(r ** 3n + 7n); let y = modPow(y2, (SECP_P + 1n) / 4n, SECP_P);
+    if (modp(y * y) !== y2) return null;
+    if ((y & 1n) !== BigInt(v - 27)) y = SECP_P - y;
+    const e = BigInt('0x' + dig) % SECP_N, rInv = modInv(r, SECP_N);
+    const Q = toAffine(jAdd(jMul([SECP_G[0], SECP_G[1], 1n], modp(-e * rInv, SECP_N)), jMul([r, y, 1n], modp(s * rInv, SECP_N))));
+    if (!Q) return null;
+    const hash = keccak256(hexBytes(hex32(Q[0]) + hex32(Q[1])));
+    return '0x' + Array.from(hash.slice(12), b => b.toString(16).padStart(2, '0')).join('');
+  } catch { return null; }
+}
+
+const VERDICT_PRIMARY_TYPES = ['PreflightVerdict', 'SignatureVerdict'];
+/**
+ * Verifies a KushBitx signedVerdict (Preflight or Signature Check): the domain is KushBitx Preflight / 1 / 8453, the
+ * primaryType is the one expected, the EIP-712 digest recomputes, and the signature recovers to signedVerdict.signer.
+ * options.signers: addresses listed as active at /.well-known/kushbitx-preflight-signers.json; pass them for full trust.
+ * options.primaryType: 'PreflightVerdict' or 'SignatureVerdict' (always pass it; the two are never interchangeable).
+ * Returns { valid, signer, reason }. Never throws.
+ */
+export function verifySignedVerdict(signedVerdict, options = {}) {
+  const fail = reason => ({ valid: false, signer: null, reason });
+  try {
+    if (!signedVerdict || typeof signedVerdict !== 'object') return fail('no signedVerdict');
+    const td = signedVerdict.typedData, d = td?.domain;
+    if (!td || !d || d.name !== 'KushBitx Preflight' || String(d.version) !== '1' || chainIdOf({ chainId: d.chainId }) !== BASE_CHAIN_ID) return fail('wrong domain');
+    if (!VERDICT_PRIMARY_TYPES.includes(td.primaryType) || (options.primaryType && td.primaryType !== options.primaryType)) return fail('wrong primaryType');
+    const digest = typedDataDigest(td);
+    if (String(signedVerdict.digest || '').toLowerCase() !== digest) return fail('digest does not match the typed data');
+    const signer = recoverAddress(digest, signedVerdict.signature);
+    if (!signer || signer !== String(signedVerdict.signer || '').toLowerCase()) return fail('bad signature');
+    if (Array.isArray(options.signers) && !options.signers.map(a => String(a).toLowerCase()).includes(signer)) return fail('signer not in the trusted list');
+    return { valid: true, signer, reason: null };
+  } catch { return fail('malformed signedVerdict'); }
+}
+
 /**
  * True only for an ALLOW Signature Check report on this exact typed data, for this signer, on Base, before expiresAt.
  * request: { chainId: 8453 (stated), signer, typedData }. typedData.domain.chainId must also be 8453: a signature
  * without a chain in its domain could be replayed elsewhere, so it is never accepted. Anything else: do not sign.
+ * When the report carries signedVerdict, it must also verify: a SignatureVerdict for the same typedDataDigest and
+ * signer, chainId 8453, ALLOW, not expired, with a valid KushBitx signature. options.signers (active addresses from
+ * /.well-known/kushbitx-preflight-signers.json) restricts the key; options.requireSigned makes signedVerdict mandatory.
  */
-export async function canSignTypedData(report, request, now = Date.now()) {
+export async function canSignTypedData(report, request, now = Date.now(), options = {}) {
   if (!report || typeof report !== 'object' || report.verdict !== 'ALLOW' || typeof report.typedDataDigest !== 'string') return false;
   if (!request || typeof request !== 'object' || request.chainId === undefined || request.chainId === null || chainIdOf(request) !== BASE_CHAIN_ID) return false;
   if (report.chainId !== undefined && Number(report.chainId) !== BASE_CHAIN_ID) return false;
@@ -259,9 +324,13 @@ export async function canSignTypedData(report, request, now = Date.now()) {
   if (domainChain === undefined || domainChain === null || chainIdOf({ chainId: domainChain }) !== BASE_CHAIN_ID) return false;
   if (typeof request.signer !== 'string' || typeof report.signer !== 'string' || request.signer.toLowerCase() !== report.signer.toLowerCase()) return false;
   if (!report.expiresAt || !(Date.parse(report.expiresAt) > now)) return false;
-  try {
-    return report.typedDataDigest.toLowerCase() === typedDataDigest(request.typedData);
-  } catch {
-    return false;
-  }
+  let local;
+  try { local = typedDataDigest(request.typedData); } catch { return false; }
+  if (report.typedDataDigest.toLowerCase() !== local) return false;
+  const sv = report.signedVerdict;
+  if (sv === undefined || sv === null) return !options.requireSigned;
+  const m = sv.typedData?.message;
+  if (!m || String(m.typedDataDigest || '').toLowerCase() !== local || String(m.signer || '').toLowerCase() !== request.signer.toLowerCase()) return false;
+  if (Number(m.chainId) !== BASE_CHAIN_ID || Number(m.verdict) !== 1 || !(Number(m.expiresAt) * 1000 > now)) return false;
+  return verifySignedVerdict(sv, { primaryType: 'SignatureVerdict', signers: options.signers }).valid;
 }

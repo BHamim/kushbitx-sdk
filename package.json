@@ -1,6 +1,6 @@
 {
   "name": "@kushbitx/sdk",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Zero-dependency ESM client for KushBitx AgentProof services on Base",
   "type": "module",
   "exports": {

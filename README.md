@@ -80,6 +80,16 @@ if (await canSignTypedData(report, request)) {
 
 `typedDataDigest(typedData)` returns the same digest on its own. Neither function uses the network or a key.
 
+**Signed verdicts (0.1.7).** An ALLOW from Signature Check carries `signedVerdict`: an EIP-712 `SignatureVerdict` signed by a KushBitx key, valid at most 60 seconds. When it is present, `canSignTypedData` also verifies it: same `typedDataDigest` and signer, chainId 8453, ALLOW, not expired, valid signature. For full trust, pass the active signer addresses from https://kushbitx.com/.well-known/kushbitx-preflight-signers.json:
+
+```js
+const signers = (await (await fetch('https://kushbitx.com/.well-known/kushbitx-preflight-signers.json')).json())
+  .signers.filter(s => s.status === 'active').map(s => s.address);
+if (await canSignTypedData(report, request, Date.now(), { signers, requireSigned: true })) { /* sign now */ }
+```
+
+`verifySignedVerdict(signedVerdict, { primaryType, signers })` checks any KushBitx signed verdict on its own. Always pass `primaryType`: a `SignatureVerdict` (Signature Check) is never a `PreflightVerdict` (Preflight). `recoverAddress(digest, signature)` is the dependency-free secp256k1 recovery it uses.
+
 Required checks per transaction type: `requiredChecks` in https://kushbitx.com/api/services.
 
 Current prices: https://kushbitx.com/api/services

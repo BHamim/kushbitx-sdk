@@ -133,11 +133,17 @@ export interface TypedData { domain: { name?: string; version?: string; chainId?
 /** Input of Signature Check (0.003 USDC). */
 export interface SignatureCheckInput { chainId: 8453; signer: Address; typedData: TypedData; expectedPayTo?: Address; expectedAmount?: string; expectedSpender?: Address }
 /** Signature Check report (fields used by canSignTypedData). */
-export interface SignatureCheckReport { service: 'signature-check'; verdict: 'ALLOW' | 'REVIEW' | 'BLOCK'; typedDataDigest: `0x${string}`; chainId: 8453; signer: Address; expiresAt: string; kind: string; reasonCodes: string[]; [k: string]: unknown }
+export interface SignatureCheckReport { service: 'signature-check'; verdict: 'ALLOW' | 'REVIEW' | 'BLOCK'; typedDataDigest: `0x${string}`; chainId: 8453; signer: Address; expiresAt: string; kind: string; reasonCodes: string[]; signedVerdict?: SignedVerdict | null; signedVerdictNote?: string; [k: string]: unknown }
 /** EIP-712 digest of typed data, computed locally (no network). Equals typedDataDigest in a Signature Check report. Throws on malformed typed data. */
 export declare function typedDataDigest(typedData: TypedData): `0x${string}`;
-/** True only for ALLOW on this exact typed data, for this signer, before expiresAt. request.chainId and typedData.domain.chainId must both be 8453; anything else is false. */
-export declare function canSignTypedData(report: SignatureCheckReport | Record<string, unknown>, request: { chainId: number | string | bigint; signer: Address; typedData: TypedData }, now?: number): Promise<boolean>;
+/** A KushBitx signed verdict (ALLOW only). Preflight: primaryType PreflightVerdict. Signature Check: primaryType SignatureVerdict. Never interchangeable. */
+export interface SignedVerdict { scheme: "eip712"; primaryType?: "PreflightVerdict" | "SignatureVerdict"; keyId: string; signer: Address; rulesVersion: string; typedData: TypedData; digest: `0x${string}`; signature: `0x${string}`; verify?: string; [k: string]: unknown }
+/** Address that produced a 65-byte r,s,v signature over a 32-byte digest, or null (high s and v other than 27/28 are rejected). No dependency, no network. */
+export declare function recoverAddress(digest: string, signature: string): Address | null;
+/** Verifies a KushBitx signedVerdict: domain KushBitx Preflight / 1 / 8453, primaryType, recomputed digest and signature. Pass signers (active addresses from /.well-known/kushbitx-preflight-signers.json) for full trust. Never throws. */
+export declare function verifySignedVerdict(signedVerdict: SignedVerdict | unknown, options?: { primaryType?: "PreflightVerdict" | "SignatureVerdict"; signers?: string[] }): { valid: boolean; signer: Address | null; reason: string | null };
+/** True only for ALLOW on this exact typed data, for this signer, before expiresAt. request.chainId and typedData.domain.chainId must both be 8453. When the report carries signedVerdict, it must verify too (SignatureVerdict, same digest and signer, not expired); options.signers restricts the key; options.requireSigned makes it mandatory. Anything else is false. */
+export declare function canSignTypedData(report: SignatureCheckReport | Record<string, unknown>, request: { chainId: number | string | bigint; signer: Address; typedData: TypedData }, now?: number, options?: { signers?: string[]; requireSigned?: boolean }): Promise<boolean>;
 
 export declare class KushBitxClient {
   constructor(options?: ClientOptions);
