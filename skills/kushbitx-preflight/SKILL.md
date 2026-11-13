@@ -79,7 +79,7 @@ Request:
 }
 ```
 - Always send `expectedPayTo` and `expectedAmount` (atomic units). A different payee or amount returns BLOCK (`PAYTO_MISMATCH`, `AMOUNT_MISMATCH`).
-- Long validity windows return REVIEW (`LONG_AUTHORIZATION`). x402 payments normally use a few minutes.
+- An authorization valid for more than 1 hour returns REVIEW (`LONG_AUTHORIZATION`) and is never signed. x402 payments normally use a few minutes.
 - Sign the typed data only on `ALLOW`, only the exact typed data you sent (`typedDataDigest`), only as the same signer, and before `expiresAt`. `canSignTypedData(report, request)` from `@kushbitx/sdk` checks all of this; anything else means do not sign.
 
 ## MCP
